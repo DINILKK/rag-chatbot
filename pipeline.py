@@ -4,7 +4,9 @@ from pypdf import PdfReader
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 from groq import Groq
+from sentence_transformers import CrossEncoder
 
+reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
 model = SentenceTransformer("all-MiniLM-L6-v2")
 
 def read_pdf(path):
@@ -53,7 +55,7 @@ def create_embeddings(chunks):
 
 
 
-def retrieve(query, chunks, embeddings, k=4):
+def retrieve(query, chunks, embeddings, k=20):
     model = SentenceTransformer("all-MiniLM-L6-v2")
 
     query_embedding = model.encode([query])
@@ -71,6 +73,11 @@ def retrieve(query, chunks, embeddings, k=4):
         )
     return results
 
+def rerank(query, chunks, k=5):
+    pairs = [[query, chunk["text"]] for chunk in chunks]
+    scores = reranker.predict(pairs)
+    ranked = sorted(zip(scores, chunks), reverse=True)
+    return [chunk for score, chunk in ranked[:k]]
 
 def generate_answer(query, retrieved_chunks, api_key):
     context = "\n\n".join([chunk["text"] for chunk in retrieved_chunks])

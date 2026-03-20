@@ -4,7 +4,7 @@ import tempfile
 import numpy as np
 from groq import Groq
 from pypdf import PdfReader
-from sentence_transformers import SentenceTransformer
+from sentence_transformers import SentenceTransformer, CrossEncoder
 from sklearn.metrics.pairwise import cosine_similarity
 
 # ── Page config ───────────────────────────────────────────────────────────────
@@ -37,7 +37,7 @@ hr { border-color: #1e1e2e !important; }
 """, unsafe_allow_html=True)
 
 # ── Session state ─────────────────────────────────────────────────────────────
-for key, val in [("messages", []), ("chunks", None), ("embeddings", None), ("doc_name", None), ("model", None)]:
+for key, val in [("messages", []), ("chunks", None), ("embeddings", None), ("doc_name", None)]:
     if key not in st.session_state:
         st.session_state[key] = val
 
@@ -45,6 +45,11 @@ for key, val in [("messages", []), ("chunks", None), ("embeddings", None), ("doc
 @st.cache_resource
 def load_model():
     return SentenceTransformer("all-MiniLM-L6-v2")
+
+
+@st.cache_resource
+def load_reranker():
+    return CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
 
 
 def load_pdf(path):
@@ -64,7 +69,6 @@ def load_txt(path):
 
 
 def chunk_text(pages, chunk_size=300, overlap=50):
-    """Smart chunking — respects sentence boundaries."""
     chunks = []
     for p in pages:
         words = p["text"].split()
@@ -76,12 +80,20 @@ def chunk_text(pages, chunk_size=300, overlap=50):
     return chunks
 
 
-def retrieve(query, k=8):
+def retrieve(query, k=20):
     model = load_model()
     q_emb  = model.encode([query])
     scores = cosine_similarity(q_emb, st.session_state.embeddings)[0]
     top_k  = np.argsort(scores)[::-1][:k]
     return [st.session_state.chunks[i] for i in top_k]
+
+
+def rerank(query, chunks, k=5):
+    reranker = load_reranker()
+    pairs    = [[query, chunk["text"]] for chunk in chunks]
+    scores   = reranker.predict(pairs)
+    ranked   = sorted(zip(scores, chunks), reverse=True)
+    return [chunk for score, chunk in ranked[:k]]
 
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
@@ -100,7 +112,7 @@ with st.sidebar:
 
     if uploaded_file and groq_api_key:
         if st.button("⚡ Process Document"):
-            with st.spinner("Embedding document — first run downloads model (~80MB), please wait..."):
+            with st.spinner("Embedding document — first run downloads model, please wait..."):
                 try:
                     is_pdf = uploaded_file.type == "application/pdf"
                     suffix = ".pdf" if is_pdf else ".txt"
@@ -113,7 +125,6 @@ with st.sidebar:
                     chunks = chunk_text(pages)
                     texts  = [c["text"] for c in chunks]
 
-                    # Semantic embeddings
                     embedder   = load_model()
                     embeddings = embedder.encode(texts, show_progress_bar=False)
 
@@ -139,7 +150,7 @@ with st.sidebar:
         st.session_state.messages = []
         st.rerun()
 
-    st.markdown('<div style="font-size:0.7rem;color:#333355;font-family:monospace;margin-top:1rem;">Stack: Groq + LLaMA3<br>Embeddings: MiniLM-L6-v2<br>Retrieval: Cosine Similarity</div>', unsafe_allow_html=True)
+    st.markdown('<div style="font-size:0.7rem;color:#333355;font-family:monospace;margin-top:1rem;">Stack: Groq + LLaMA3<br>Embeddings: MiniLM-L6-v2<br>Reranking: CrossEncoder</div>', unsafe_allow_html=True)
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -174,7 +185,12 @@ with col2:
             st.session_state.messages.append({"role": "user", "content": query})
             with st.spinner("Thinking..."):
                 try:
-                    docs     = retrieve(query, k=8)
+                    # Retrieve top 20 candidates
+                    candidates = retrieve(query, k=20)
+
+                    # Rerank and get top 5
+                    docs = rerank(query, candidates, k=5)
+
                     context  = "\n\n".join([d["text"] for d in docs])
                     pages    = list(set([str(d["page"]) for d in docs]))
                     src_info = f"Page(s): {', '.join(sorted(pages, key=int))}" if pages else ""
