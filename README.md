@@ -6,7 +6,7 @@ chat with your PDF documents using natural language.
 Built with LLaMA 3, semantic embeddings, and Streamlit.
 
 ## 🔴 Live Demo
-[Add your Streamlit Cloud link here]
+[🚀 Try it live](https://local-chatbot.streamlit.app/)
 
 ## 🧠 How It Works
 
